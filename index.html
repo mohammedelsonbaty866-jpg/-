@@ -1,5 +1,167 @@
 
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  LayoutDashboard, 
+  ShoppingCart, 
+  Package, 
+  Users, 
+  BarChart3, 
+  Settings, 
+  Truck, 
+  MapPin, 
+  Plus, 
+  Search, 
+  Sun, 
+  Moon, 
+  LogOut, 
+  Printer, 
+  Save, 
+  AlertTriangle,
+  CreditCard,
+  UserPlus
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  addDoc, 
+  onSnapshot, 
+  updateDoc, 
+  query, 
+  orderBy,
+  where,
+  serverTimestamp,
+  increment
+} from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken,
+  onAuthStateChanged 
+} from 'firebase/auth';
 
+// --- Configuration & Firebase Setup ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'sales-pos-saas-001';
+
+// --- Main App Component ---
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [darkMode, setDarkMode] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // RULE 3: Auth initialization - Fix for permission-denied
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth Error:", err);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // RULE 1 & 2 & 3: Real-time Data Listeners with User Guard
+  useEffect(() => {
+    // Guard every Firestore operation with if (!user) return;
+    if (!user) return;
+
+    // RULE 1: Strict Paths
+    const productsRef = collection(db, 'artifacts', appId, 'public', 'data', 'products');
+    const ordersRef = collection(db, 'artifacts', appId, 'public', 'data', 'orders');
+    const customersRef = collection(db, 'artifacts', appId, 'public', 'data', 'customers');
+
+    // Error callbacks are required for onSnapshot
+    const unsubProducts = onSnapshot(productsRef, 
+      (snapshot) => {
+        setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      },
+      (error) => console.error("Products listener error:", error)
+    );
+
+    const unsubOrders = onSnapshot(ordersRef, 
+      (snapshot) => {
+        setOrders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      },
+      (error) => console.error("Orders listener error:", error)
+    );
+
+    const unsubCustomers = onSnapshot(customersRef, 
+      (snapshot) => {
+        setCustomers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      },
+      (error) => console.error("Customers listener error:", error)
+    );
+
+    return () => {
+      unsubProducts();
+      unsubOrders();
+      unsubCustomers();
+    };
+  }, [user]); // user dependency ensures listeners start AFTER auth
+
+  // Actions
+  const addToCart = (product) => {
+    if (product.stock <= 0) return;
+    setCart(prev => {
+      const existing = prev.find(item => item.id === product.id);
+      if (existing) {
+        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+      }
+      return [...prev, { ...product, qty: 1 }];
+    });
+  };
+
+  const processSale = async (customerName = "عميل نقدي") => {
+    if (!user || cart.length === 0) return;
+    const total = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+    
+    const orderData = {
+      items: cart,
+      total,
+      customer: customerName,
+      timestamp: serverTimestamp(),
+      status: 'completed',
+      type: 'pos_sale',
+      createdBy: user.uid
+    };
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'orders'), orderData);
+      
+      // Update Stock
+      for (const item of cart) {
+        const productRef = doc(db, 'artifacts', appId, 'public', 'data', 'products', item.id);
+        await updateDoc(productRef, { stock: increment(-item.qty) });
+      }
+
+      setCart([]);
+      // Custom Modal instead of alert()
+      console.log("Sale processed successfully");
+    } catch (err) {
+      console.error("Sale Error:", err);
+    }
+  };
   if (loading) return (
     <div className="h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-slate-900">
       <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
